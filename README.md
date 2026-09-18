@@ -19,14 +19,14 @@ During exploration, ImmersionFade can fade or hide UI elements that are not imme
 - Controller action overlay and central reticle
 - Performance / latency display
 
-Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat. The player frame is contextual: during exploration it remains visible while a naturally-restoring primary resource such as Mana, Energy, Focus, or Essence is below maximum, then fades away once that resource is full. Builder resources such as Rage or Fury do not keep it visible.
+Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat. The player frame is contextual: during exploration it remains visible while health is recovering or while a naturally-restoring primary resource such as Mana, Energy, Focus, or Essence is below maximum. Builder resources such as Rage or Fury do not keep it visible.
 
 When combat begins, the managed combat UI fades back in automatically, including the pet action bar when a pet is available. The Forever controller action overlay and central reticle are always visible in combat. During exploration they stay hidden until LB, LT, RB, or RT is held, then fade away again when the modifier is released.
 
 Additional behavior includes:
 
 - Smooth fade-in and fade-out transitions
-- Resource-aware player frame: stays visible while Mana, Energy, Focus, or Essence is still recovering, including modern Secret Value power data
+- Health- and resource-aware player frame: stays visible through post-combat health recovery and while Mana/Energy/Focus/Essence is still recovering
 - Reduced chat opacity while exploring
 - XP bar shown briefly when experience is gained
 - Mouse blockers for invisible UI controls
@@ -57,6 +57,7 @@ Additional behavior includes:
 
 /imfade client
 /imfade resource
+/imfade health
 /imfade frames
 /imfade reset
 ```
@@ -81,7 +82,7 @@ ImmersionFade is currently developed for **World of Warcraft: Forever** and its 
 
 Forever is still evolving, so Blizzard frame names and behavior may change during beta. `/imfade frames` can be used to help diagnose UI elements that are not yet managed correctly.
 
-On modern/Forever clients, primary resource values may be protected as **Secret Values**. ImmersionFade does not inspect or compare those values; it uses Blizzard's curve/display APIs to convert the secret resource percentage directly into player-frame opacity.
+On the current Forever beta, player health is deliberately exposed to addons as a **Secret Value**. Addons may pass secret values into Blizzard widgets for display, but they cannot safely compare them to determine whether health is exactly full. ImmersionFade therefore does not inspect health values on Forever: after combat, and whenever `UNIT_HEALTH` fires out of combat, it keeps the player frame visible; after health updates have been quiet for 3.25 seconds it hands visibility back to the existing secret-safe resource curve. This combines health recovery with Mana/Energy/Focus/Essence readiness without attempting to bypass Blizzard's restrictions. `/imfade health` and `/imfade resource` report the active paths.
 
 ## Development status
 

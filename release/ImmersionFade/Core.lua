@@ -10,9 +10,6 @@ local pauseTimer = nil
 local xpHideTimer = nil
 local xpRevealActive = false
 local lastXP = nil
-local healthRecoveryTimer = nil
-local healthRecoveryActive = false
-local HEALTH_RECOVERY_QUIET_SECONDS = 3.25
 local heartbeat = 0
 local rescanTimer = 0
 local gamepadPollTimer = 0
@@ -624,100 +621,8 @@ local function GetPlayerResourceVisibilityCurve(hiddenAlpha)
     return curve
 end
 
-local function GetReadablePlayerHealthReadiness()
-    -- Forever 1.60 currently returns Secret Values for player health to addon
-    -- code, so this function is only a compatibility path for clients/states
-    -- where Blizzard exposes ordinary numeric values. Never perform arithmetic
-    -- or comparisons until secrecy has been ruled out.
-    if type(UnitHealth) == "function" and type(UnitHealthMax) == "function" then
-        local okCurrent, currentHealth = pcall(UnitHealth, "player", false)
-        local okMax, maxHealth = pcall(UnitHealthMax, "player")
-        if okCurrent and okMax
-            and not IsSecretValue(currentHealth) and not IsSecretValue(maxHealth)
-            and type(currentHealth) == "number" and type(maxHealth) == "number"
-            and maxHealth > 0 then
-            return currentHealth < maxHealth, "raw", currentHealth, maxHealth
-        end
-    end
-
-    if type(UnitHealthPercent) == "function"
-        and CurveConstants and CurveConstants.ScaleTo100 then
-        local okPercent, healthPercent = pcall(
-            UnitHealthPercent, "player", false, CurveConstants.ScaleTo100
-        )
-        if okPercent and healthPercent ~= nil
-            and not IsSecretValue(healthPercent)
-            and type(healthPercent) == "number" then
-            return healthPercent < 99.9999, "scaled-percent", healthPercent, 100
-        end
-    end
-
-    if type(UnitHealthPercent) == "function" then
-        local okPercent, healthPercent = pcall(UnitHealthPercent, "player", false)
-        if okPercent and healthPercent ~= nil
-            and not IsSecretValue(healthPercent)
-            and type(healthPercent) == "number" then
-            return healthPercent < 0.999999, "percent", healthPercent, 1
-        end
-    end
-
-    return nil, "secret-or-unavailable"
-end
-
-local function GetHealthAccessSummary()
-    local summary = { raw = "unavailable", scaled = "unavailable", percent = "unavailable" }
-
-    if type(UnitHealth) == "function" and type(UnitHealthMax) == "function" then
-        local okCurrent, currentHealth = pcall(UnitHealth, "player", false)
-        local okMax, maxHealth = pcall(UnitHealthMax, "player")
-        if okCurrent and okMax then
-            if IsSecretValue(currentHealth) or IsSecretValue(maxHealth) then
-                summary.raw = "secret"
-            elseif type(currentHealth) == "number" and type(maxHealth) == "number" then
-                summary.raw = "readable"
-            else
-                summary.raw = "non-numeric"
-            end
-        else
-            summary.raw = "error"
-        end
-    end
-
-    if type(UnitHealthPercent) == "function" then
-        local okPercent, healthPercent = pcall(UnitHealthPercent, "player", false)
-        if okPercent then
-            summary.percent = IsSecretValue(healthPercent) and "secret" or "readable"
-        else
-            summary.percent = "error"
-        end
-
-        if CurveConstants and CurveConstants.ScaleTo100 then
-            local okScaled, scaled = pcall(UnitHealthPercent, "player", false, CurveConstants.ScaleTo100)
-            if okScaled then
-                summary.scaled = IsSecretValue(scaled) and "secret" or "readable"
-            else
-                summary.scaled = "error"
-            end
-        end
-    end
-
-    return summary
-end
-
 local function GetPlayerResourceExplorationAlpha()
     local hiddenAlpha = GetExplorationAlpha("playerFrame")
-
-    -- Health has priority. On clients where health is readable we can evaluate
-    -- it exactly. Forever 1.60 deliberately returns Secret Values to addon code,
-    -- so we also maintain an event-driven recovery latch: combat exit and each
-    -- out-of-combat UNIT_HEALTH update keep the player frame visible. Once health
-    -- updates have been quiet long enough to cover the normal regeneration tick,
-    -- control falls back to the secret-safe primary-resource curve below.
-    local healthBelowMaximum = GetReadablePlayerHealthReadiness()
-    if healthBelowMaximum == true or healthRecoveryActive then
-        return 1, false
-    end
-
     local powerType, _, isRestoring = GetPrimaryResourceInfo()
     if not isRestoring or powerType == nil then
         return hiddenAlpha, false
@@ -1272,34 +1177,6 @@ local function UpdatePlayerFrameResourceVisibility(immediate)
     StartSingleGroupTransition("playerFrame", targetAlpha, duration)
 end
 
-local function CancelHealthRecoveryWatch(clearState)
-    if healthRecoveryTimer then
-        healthRecoveryTimer:Cancel()
-        healthRecoveryTimer = nil
-    end
-    if clearState then
-        healthRecoveryActive = false
-    end
-end
-
-local function BeginHealthRecoveryWatch()
-    CancelHealthRecoveryWatch(false)
-    healthRecoveryActive = true
-
-    -- Forever deliberately prevents addons from comparing player health. We can
-    -- still observe UNIT_HEALTH itself. Out of combat, normal health regeneration
-    -- keeps producing those events until it stops; a quiet window slightly longer
-    -- than the usual regeneration tick therefore gives us a safe readiness signal
-    -- without extracting or comparing the protected value.
-    healthRecoveryTimer = C_Timer.NewTimer(HEALTH_RECOVERY_QUIET_SECONDS, function()
-        healthRecoveryTimer = nil
-        healthRecoveryActive = false
-        if initialized and ImmersionFadeDB and ImmersionFadeDB.groups.playerFrame then
-            UpdatePlayerFrameResourceVisibility(false)
-        end
-    end)
-end
-
 local function BeginTimedPause(seconds)
     seconds = Clamp(tonumber(seconds) or 5, 0.25, 60)
 
@@ -1462,31 +1339,6 @@ local function PrintClientInfo()
         flavor, tostring(CLIENT_VERSION), tostring(CLIENT_BUILD), tostring(CLIENT_INTERFACE)))
 end
 
-local function PrintHealthInfo()
-    local belowMaximum, source, currentHealth, maxHealth = GetReadablePlayerHealthReadiness()
-    if belowMaximum ~= nil then
-        local state = belowMaximum and "BELOW MAX - player frame should be visible" or "FULL - health does not force the player frame visible"
-        if source == "scaled-percent" then
-            Print(string.format("Health readiness: %s via readable scaled health (%.2f%%).",
-                state, currentHealth))
-        elseif source == "raw" then
-            Print(string.format("Health readiness: %s via readable raw health (%s/%s).",
-                state, tostring(currentHealth), tostring(maxHealth)))
-        else
-            Print(string.format("Health readiness: %s via readable health percentage.", state))
-        end
-        return
-    end
-
-    local access = GetHealthAccessSummary()
-    Print(string.format(
-        "Health values are protected on this client (raw=%s, percent=%s, scaled=%s). Recovery watch is %s; it clears after %.2fs without a player health update.",
-        access.raw, access.percent, access.scaled,
-        healthRecoveryActive and "ACTIVE" or "idle",
-        HEALTH_RECOVERY_QUIET_SECONDS
-    ))
-end
-
 local function PrintResourceInfo()
     local powerType, powerToken, isRestoring = GetPrimaryResourceInfo()
     if powerType == nil then
@@ -1539,7 +1391,6 @@ local function PrintHelp()
     Print("  /imfade status - current mode, client and timing")
     Print("  /imfade client - print detected WoW build/interface")
     Print("  /imfade resource - print primary-resource diagnostics")
-    Print("  /imfade health - print player-health readiness diagnostics")
     Print("  /imfade on | off - enable/disable automatic mode switching")
     Print("  /imfade pause - toggle an indefinite full-HUD pause")
     Print("  /imfade pause <seconds> - show the full HUD temporarily")
@@ -1579,11 +1430,6 @@ local function HandleSlashCommand(message)
 
     if command == "resource" or command == "power" then
         PrintResourceInfo()
-        return
-    end
-
-    if command == "health" or command == "hp" then
-        PrintHealthInfo()
         return
     end
 
@@ -1740,7 +1586,7 @@ local function HandleSlashCommand(message)
         CancelPauseTimer()
         ResolveFrames()
         EvaluateMode(false)
-        Print("Settings reset to v0.6.10 defaults.")
+        Print("Settings reset to v0.6.2 defaults.")
         return
     end
 
@@ -1764,7 +1610,7 @@ local function Initialize()
     SlashCmdList.ImmersionFade = HandleSlashCommand
 
     EvaluateMode(false)
-    Print("v0.6.10 loaded. Secret-safe recovery readiness enabled. Type |cffffffff/imfade|r for controls.")
+    Print("v0.6.4 loaded. Contextual controller reticle enabled. Type |cffffffff/imfade|r for controls.")
 end
 
 addon:SetScript("OnEvent", function(_, event, arg1)
@@ -1783,28 +1629,14 @@ addon:SetScript("OnEvent", function(_, event, arg1)
     if not initialized then return end
 
     if event == "PLAYER_REGEN_DISABLED" then
-        CancelHealthRecoveryWatch(true)
         EnterCombatMode(false)
     elseif event == "PLAYER_REGEN_ENABLED" then
-        -- We cannot inspect Forever's secret player-health value, so assume
-        -- recovery may be needed when combat ends. UNIT_HEALTH events will keep
-        -- this watch alive while health regeneration is still happening.
-        BeginHealthRecoveryWatch()
         EnsureInteractionBlockers()
         EnterExplorationMode(false)
     elseif event == "UNIT_POWER_UPDATE"
         or event == "UNIT_MAXPOWER"
         or event == "UNIT_DISPLAYPOWER" then
         if arg1 == "player" then
-            UpdatePlayerFrameResourceVisibility(false)
-        end
-    elseif event == "UNIT_HEALTH"
-        or event == "UNIT_MAXHEALTH"
-        or event == "UNIT_MAX_HEALTH_MODIFIERS_CHANGED" then
-        if arg1 == "player" then
-            if not ShouldShowFullHUD() then
-                BeginHealthRecoveryWatch()
-            end
             UpdatePlayerFrameResourceVisibility(false)
         end
     elseif event == "PLAYER_XP_UPDATE" then
@@ -1823,9 +1655,6 @@ addon:SetScript("OnEvent", function(_, event, arg1)
         UpdateGamePadModifierState(true)
         if type(UnitXP) == "function" then
             lastXP = UnitXP("player")
-        end
-        if not ShouldShowFullHUD() then
-            BeginHealthRecoveryWatch()
         end
         EvaluateMode(false)
     elseif event == "GAME_PAD_CONFIGS_CHANGED"
@@ -1913,9 +1742,6 @@ addon:RegisterEvent("PLAYER_REGEN_ENABLED")
 addon:RegisterEvent("UNIT_POWER_UPDATE")
 addon:RegisterEvent("UNIT_MAXPOWER")
 addon:RegisterEvent("UNIT_DISPLAYPOWER")
-addon:RegisterEvent("UNIT_HEALTH")
-addon:RegisterEvent("UNIT_MAXHEALTH")
-addon:RegisterEvent("UNIT_MAX_HEALTH_MODIFIERS_CHANGED")
 addon:RegisterEvent("PLAYER_XP_UPDATE")
 addon:RegisterEvent("PLAYER_LEVEL_UP")
 addon:RegisterEvent("UPDATE_BONUS_ACTIONBAR")

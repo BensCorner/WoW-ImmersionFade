@@ -1,5 +1,29 @@
 # ImmersionFade Changelog
 
+## 0.6.10
+- Reworked health-aware player-frame visibility for WoW Forever after confirming that player health remains a Secret Value even through percentage/curve calls.
+- Removed health comparisons from the Forever path instead of attempting to inspect protected values.
+- Added an event-driven health recovery watch: combat exit and out-of-combat `UNIT_HEALTH` updates keep the player frame visible, then hand control back to resource readiness after 3.25 seconds without another health update.
+- `/imfade health` now reports health API secrecy and whether the recovery watch is active.
+- Preserved exact readable-health handling as a compatibility path for clients where Blizzard exposes ordinary numeric health values.
+
+## 0.6.9
+- Fixed health-aware player-frame visibility again for Forever clients where raw player health remains secret outside combat.
+- Health readiness now uses `UnitHealthPercent(..., CurveConstants.ScaleTo100)` first, Blizzard's modern curve-based percentage path intended for addon-side health logic.
+- Raw/non-predicted health and plain percentage reads remain as compatibility fallbacks only.
+- `/imfade health` now reports the scaled health percentage path when available.
+
+## 0.6.8
+- Fixed health-aware player-frame visibility on Forever's modern client.
+- Exploration health readiness now prefers raw, non-predicted player health instead of the always-secret percentage helper.
+- Full health falls back to the existing restoring-resource readiness rule; injured players now force the player frame visible.
+- Added `/imfade health` diagnostics and handling for max-health modifier changes.
+
+## 0.6.7
+- Player frame now stays visible during exploration while the player is below maximum health.
+- Health and restoring-resource readiness are combined: the frame only fades away once health is full and the relevant restoring primary resource is also full.
+- Added live updates for player health and maximum-health changes.
+
 ## 0.6.6
 - Added Forever's `SwingTimerRangedFrame` to the existing swing timer group.
 - Ranged swing timers now hide during exploration and return in combat/full-HUD states, matching melee swing timers.
