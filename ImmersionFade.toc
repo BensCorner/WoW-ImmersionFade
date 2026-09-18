@@ -2,7 +2,7 @@
 ## Title: ImmersionFade
 ## Notes: Immersive exploration/combat HUD states. Forever 1.60 modern-client compatible
 ## Author: Benchungus - AI assisted
-## Version: 0.6.3
+## Version: 0.6.5
 ## SavedVariablesPerCharacter: ImmersionFadeDB
 ## Category: HUDs
 

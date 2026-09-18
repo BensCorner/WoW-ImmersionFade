@@ -15,12 +15,13 @@ During exploration, ImmersionFade can fade or hide UI elements that are not imme
 - Micro menu and bag controls
 - Cooldown Manager frames
 - Swing timer
-- Controller action overlay
+- Pet action bar / pet controls
+- Controller action overlay and central reticle
 - Performance / latency display
 
 Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat. The player frame is contextual: during exploration it remains visible while a naturally-restoring primary resource such as Mana, Energy, Focus, or Essence is below maximum, then fades away once that resource is full. Builder resources such as Rage or Fury do not keep it visible.
 
-When combat begins, the managed combat UI fades back in automatically. The Forever controller action overlay is always visible in combat. During exploration it stays hidden until LB, LT, RB, or RT is held, then fades away again when the modifier is released.
+When combat begins, the managed combat UI fades back in automatically, including the pet action bar when a pet is available. The Forever controller action overlay and central reticle are always visible in combat. During exploration they stay hidden until LB, LT, RB, or RT is held, then fade away again when the modifier is released.
 
 Additional behavior includes:
 
@@ -31,7 +32,7 @@ Additional behavior includes:
 - Mouse blockers for invisible UI controls
 - Temporary HUD reveal with `/imfade peek`
 - Edit Mode and vehicle / override bar handling
-- Contextual controller UI: always visible in combat; hidden during exploration unless LB/LT/RB/RT are held
+- Contextual controller UI and reticle: always visible in combat; hidden during exploration unless LB/LT/RB/RT are held
 - WoW: Forever client detection and diagnostics
 
 ## Useful commands

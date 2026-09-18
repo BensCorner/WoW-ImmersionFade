@@ -1,5 +1,14 @@
 # ImmersionFade Changelog
 
+## 0.6.5
+- Pet controls are now managed by default through Forever's top-level `PetActionBar` frame.
+- The pet action bar is hidden during exploration and shown in combat/full-HUD states, matching the normal action bars.
+- The separate pet unit frame remains unchanged and optional.
+
+## 0.6.4
+- Added support for Forever's separate `GamepadReticle` frame.
+- The central controller reticle now follows the same contextual visibility rules as the controller action overlay: hidden during exploration, shown while LB/LT/RB/RT are held, and always shown in combat/full-HUD states.
+
 ## 0.6.3
 - Fixed resource-aware player-frame visibility on WoW Forever's modern client, where primary resource values such as Mana can be Secret Values.
 - Uses `UnitPowerPercent()` with a step curve and passes the resulting secret-safe alpha directly to the player frame instead of inspecting the resource value.

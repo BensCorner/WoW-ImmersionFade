@@ -65,10 +65,10 @@ local DEFAULTS = {
         chat = true,
         experienceBar = true,
         performanceBar = true,
+        petActionBar = true,
 
         -- Available but deliberately OFF by default.
         -- These are things you may actively use outside combat.
-        petActionBar = false,
         stanceBar = false,
         petFrame = false,
     },
@@ -189,6 +189,11 @@ local GROUP_DEFINITIONS = {
             -- Fading the parent keeps all page units, icons, labels, and helper
             -- artwork in sync without touching its protected child buttons.
             { "GamepadMainActionBarFrame" },
+
+            -- Forever beta: the small central controller targeting reticle is a
+            -- separate top-level Blizzard_Gamepad frame, so it must follow the
+            -- same contextual visibility rule explicitly.
+            { "GamepadReticle" },
         },
     },
     chat = {
@@ -214,6 +219,9 @@ local GROUP_DEFINITIONS = {
         label = "Pet action bar",
         blockMouse = true,
         elements = {
+            -- Forever beta exposes PetActionBar as the top-level controller
+            -- for the pet command buttons. Fading the parent keeps the entire
+            -- pet control strip in sync without touching protected children.
             { "PetActionBar", "PetActionBarFrame" },
         },
     },
@@ -1597,7 +1605,7 @@ local function Initialize()
     SlashCmdList.ImmersionFade = HandleSlashCommand
 
     EvaluateMode(false)
-    Print("v0.6.3 loaded. Secret-safe resource-aware player frame enabled. Type |cffffffff/imfade|r for controls.")
+    Print("v0.6.4 loaded. Contextual controller reticle enabled. Type |cffffffff/imfade|r for controls.")
 end
 
 addon:SetScript("OnEvent", function(_, event, arg1)
