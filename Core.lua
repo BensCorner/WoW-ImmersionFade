@@ -178,6 +178,11 @@ local GROUP_DEFINITIONS = {
             -- Defensive fallback for a possible off-hand timer on dual-wield
             -- characters. This is harmless when the frame does not exist.
             { "SwingTimerOffHandFrame", "SwingTimerOffhandFrame" },
+
+            -- Forever beta: ranged attacks use a separate top-level swing
+            -- timer frame. Keep it in the same group so all swing timers share
+            -- the normal exploration/combat visibility behavior.
+            { "SwingTimerRangedFrame" },
         },
     },
     controllerUI = {

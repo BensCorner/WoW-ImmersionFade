@@ -1,5 +1,9 @@
 # ImmersionFade Changelog
 
+## 0.6.6
+- Added Forever's `SwingTimerRangedFrame` to the existing swing timer group.
+- Ranged swing timers now hide during exploration and return in combat/full-HUD states, matching melee swing timers.
+
 ## 0.6.5
 - Pet controls are now managed by default through Forever's top-level `PetActionBar` frame.
 - The pet action bar is hidden during exploration and shown in combat/full-HUD states, matching the normal action bars.

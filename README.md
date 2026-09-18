@@ -14,7 +14,7 @@ During exploration, ImmersionFade can fade or hide UI elements that are not imme
 - Player frame
 - Micro menu and bag controls
 - Cooldown Manager frames
-- Swing timer
+- Melee and ranged swing timers
 - Pet action bar / pet controls
 - Controller action overlay and central reticle
 - Performance / latency display
