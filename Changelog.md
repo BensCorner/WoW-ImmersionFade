@@ -1,5 +1,18 @@
 # ImmersionFade Changelog
 
+## 0.6.3
+- Fixed resource-aware player-frame visibility on WoW Forever's modern client, where primary resource values such as Mana can be Secret Values.
+- Uses `UnitPowerPercent()` with a step curve and passes the resulting secret-safe alpha directly to the player frame instead of inspecting the resource value.
+- Preserves the readable-resource fallback for clients where power values are not secret.
+- Added `/imfade resource` diagnostics for primary-resource type and secrecy handling.
+
+## 0.6.2
+- Player frame is now resource-aware during exploration.
+- Keeps the player frame visible while a naturally-restoring primary resource is below maximum.
+- Mana, Energy, Focus, and Essence are treated as readiness resources.
+- Builder resources such as Rage, Fury, Runic Power, Insanity, Holy Power, and Soul Shards do not force the player frame visible.
+- Resource changes and primary-resource swaps update the frame automatically.
+
 ## 0.6.1
 - Controller action UI now always remains visible while in combat/full-HUD mode.
 - Improved RT detection on WoW Forever by checking direct gamepad key state in addition to mapped button state.

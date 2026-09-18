@@ -18,13 +18,14 @@ During exploration, ImmersionFade can fade or hide UI elements that are not imme
 - Controller action overlay
 - Performance / latency display
 
-Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat.
+Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat. The player frame is contextual: during exploration it remains visible while a naturally-restoring primary resource such as Mana, Energy, Focus, or Essence is below maximum, then fades away once that resource is full. Builder resources such as Rage or Fury do not keep it visible.
 
 When combat begins, the managed combat UI fades back in automatically. The Forever controller action overlay is always visible in combat. During exploration it stays hidden until LB, LT, RB, or RT is held, then fades away again when the modifier is released.
 
 Additional behavior includes:
 
 - Smooth fade-in and fade-out transitions
+- Resource-aware player frame: stays visible while Mana, Energy, Focus, or Essence is still recovering, including modern Secret Value power data
 - Reduced chat opacity while exploring
 - XP bar shown briefly when experience is gained
 - Mouse blockers for invisible UI controls
@@ -54,6 +55,7 @@ Additional behavior includes:
 /imfade blockers off
 
 /imfade client
+/imfade resource
 /imfade frames
 /imfade reset
 ```
@@ -77,6 +79,8 @@ The goal is to preserve the familiar Blizzard interface while making Azeroth its
 ImmersionFade is currently developed for **World of Warcraft: Forever** and its modern/Retail-based UI architecture.
 
 Forever is still evolving, so Blizzard frame names and behavior may change during beta. `/imfade frames` can be used to help diagnose UI elements that are not yet managed correctly.
+
+On modern/Forever clients, primary resource values may be protected as **Secret Values**. ImmersionFade does not inspect or compare those values; it uses Blizzard's curve/display APIs to convert the secret resource percentage directly into player-frame opacity.
 
 ## Development status
 

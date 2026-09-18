@@ -16,6 +16,8 @@ local gamepadPollTimer = 0
 local gamepadModifierActive = false
 local gamepadButtonIndexes = {}
 local gamepadButtonIndexesDirty = true
+local playerResourceVisibilityCurve = nil
+local playerResourceVisibilityCurveHiddenAlpha = nil
 
 local GAMEPAD_REVEAL_BUTTONS = {
     "PADLSHOULDER",
@@ -122,6 +124,7 @@ local GROUP_DEFINITIONS = {
     playerFrame = {
         label = "Player frame",
         blockMouse = true,
+        mode = "playerResource",
         elements = {
             { "PlayerFrame" },
         },
@@ -512,6 +515,48 @@ local function IsInCombatLockdown()
     return ok and value and true or false
 end
 
+-- Primary resources fall into two broad gameplay patterns. "Restoring"
+-- resources naturally refill toward their ready state and are useful pull-readiness
+-- information outside combat. Builder resources normally sit below maximum (often
+-- at zero), so using "< 100%" for them would keep the player frame visible forever.
+local RESTORING_PRIMARY_POWER_TOKENS = {
+    MANA = true,
+    FOCUS = true,
+    ENERGY = true,
+    ESSENCE = true,
+}
+
+-- Numeric fallbacks keep this working if Forever returns a valid Enum.PowerType
+-- without a token for some reason. These values are stable Blizzard enum values.
+local RESTORING_PRIMARY_POWER_IDS = {
+    [0] = true,  -- Mana
+    [2] = true,  -- Focus
+    [3] = true,  -- Energy
+    [19] = true, -- Essence
+}
+
+local function GetPrimaryResourceInfo()
+    if type(UnitPowerType) ~= "function" then
+        return nil, nil, false
+    end
+
+    local okType, powerType, powerToken = pcall(UnitPowerType, "player")
+    if not okType or IsSecretValue(powerType) or IsSecretValue(powerToken) then
+        return nil, nil, false
+    end
+
+    local normalizedToken = powerToken
+    if type(normalizedToken) == "string" then
+        normalizedToken = normalizedToken:upper()
+    end
+
+    local isRestoring = RESTORING_PRIMARY_POWER_TOKENS[normalizedToken]
+        or RESTORING_PRIMARY_POWER_IDS[powerType]
+        or false
+
+    return powerType, normalizedToken, isRestoring
+end
+
 local function GetExplorationAlpha(key)
     if ImmersionFadeDB
         and type(ImmersionFadeDB.explorationAlphas) == "table"
@@ -519,6 +564,99 @@ local function GetExplorationAlpha(key)
         return Clamp(tonumber(ImmersionFadeDB.explorationAlphas[key]) or 0, 0, 1)
     end
     return Clamp((ImmersionFadeDB and ImmersionFadeDB.explorationAlpha) or 0, 0, 1)
+end
+
+
+local function GetPlayerResourceVisibilityCurve(hiddenAlpha)
+    if not C_CurveUtil or type(C_CurveUtil.CreateCurve) ~= "function" then
+        return nil
+    end
+
+    hiddenAlpha = Clamp(hiddenAlpha or 0, 0, 1)
+    if playerResourceVisibilityCurve
+        and playerResourceVisibilityCurveHiddenAlpha == hiddenAlpha then
+        return playerResourceVisibilityCurve
+    end
+
+    local ok, curve = pcall(C_CurveUtil.CreateCurve)
+    if not ok or not curve then
+        return nil
+    end
+
+    local curveType = Enum and Enum.LuaCurveType and Enum.LuaCurveType.Step or 1
+    if type(curve.SetType) == "function" then
+        local typeOK = pcall(curve.SetType, curve, curveType)
+        if not typeOK then
+            return nil
+        end
+    end
+
+    -- UnitPowerPercent feeds curves a normalized value in [0, 1]. With a Step
+    -- curve this yields alpha 1 for every value below exactly full, then the
+    -- normal exploration alpha at 100%. If the percentage is a Secret Value,
+    -- the result remains secret, but Blizzard explicitly allows passing that
+    -- value into Region:SetAlpha without exposing it to addon code.
+    local ok0 = pcall(curve.AddPoint, curve, 0.0, 1.0)
+    local ok1 = pcall(curve.AddPoint, curve, 0.999999, 1.0)
+    local ok2 = pcall(curve.AddPoint, curve, 1.0, hiddenAlpha)
+    if not ok0 or not ok1 or not ok2 then
+        return nil
+    end
+
+    playerResourceVisibilityCurve = curve
+    playerResourceVisibilityCurveHiddenAlpha = hiddenAlpha
+    return curve
+end
+
+local function GetPlayerResourceExplorationAlpha()
+    local hiddenAlpha = GetExplorationAlpha("playerFrame")
+    local powerType, _, isRestoring = GetPrimaryResourceInfo()
+    if not isRestoring or powerType == nil then
+        return hiddenAlpha, false
+    end
+
+    -- Modern / Forever path: primary power can be secret. Curves let us turn
+    -- the secret percentage into a display alpha without inspecting it.
+    if type(UnitPowerPercent) == "function" then
+        local curve = GetPlayerResourceVisibilityCurve(hiddenAlpha)
+        if curve then
+            local okPercent, alpha = pcall(UnitPowerPercent, "player", powerType, false, curve)
+            if okPercent then
+                if IsSecretValue(alpha) then
+                    return alpha, true
+                end
+                if alpha ~= nil and type(alpha) == "number" then
+                    return Clamp(alpha, 0, 1), false
+                end
+            end
+        end
+    end
+
+    -- Compatibility fallback for clients where primary power is readable.
+    if type(UnitPower) == "function" and type(UnitPowerMax) == "function" then
+        local okCurrent, currentPower = pcall(UnitPower, "player", powerType)
+        local okMax, maxPower = pcall(UnitPowerMax, "player", powerType)
+        if okCurrent and okMax
+            and not IsSecretValue(currentPower) and not IsSecretValue(maxPower)
+            and type(currentPower) == "number" and type(maxPower) == "number"
+            and maxPower > 0 then
+            return currentPower < maxPower and 1 or hiddenAlpha, false
+        end
+    end
+
+    return hiddenAlpha, false
+end
+
+local function SafeSetAlphaPossiblySecret(region, alpha)
+    if not IsRegionAccessible(region) then
+        return false
+    end
+
+    if IsSecretValue(alpha) then
+        return pcall(region.SetAlpha, region, alpha)
+    end
+
+    return pcall(region.SetAlpha, region, Clamp(alpha, 0, 1))
 end
 
 local function CancelHideTimer()
@@ -703,6 +841,22 @@ local function GetDesiredGroupAlpha(key, showFullHUD)
         return 0
     end
 
+    if group.mode == "playerResource" then
+        -- Combat/full-HUD mode always wins. During exploration the resource
+        -- alpha can be a Secret Value on the modern client; generic callers
+        -- need a plain numeric target, so secret-aware application is handled
+        -- separately by ApplyPlayerResourceExplorationAlpha().
+        if showFullHUD then
+            return 1
+        end
+
+        local alpha, isSecret = GetPlayerResourceExplorationAlpha()
+        if isSecret then
+            return GetExplorationAlpha(key)
+        end
+        return alpha
+    end
+
     if group.mode == "gamepadModifier" then
         -- The controller overlay is combat UI first and contextual exploration UI
         -- second: always visible in combat/full-HUD states, otherwise reveal it
@@ -787,6 +941,34 @@ local function ResolveFrames()
     RefreshInteractionBlockers()
 end
 
+local function ApplyPlayerResourceExplorationAlpha()
+    local group = groups.playerFrame
+    if not group or not ImmersionFadeDB or not ImmersionFadeDB.groups.playerFrame then
+        return false
+    end
+
+    local alpha, isSecret = GetPlayerResourceExplorationAlpha()
+    if isSecret then
+        -- Never store/compare the secret itself. Keep a nominal hidden alpha for
+        -- our transition/blocker bookkeeping and pass the secret only to the
+        -- Blizzard region setter that is designed to accept it.
+        local nominalAlpha = GetExplorationAlpha("playerFrame")
+        group.animating = false
+        group.startAlpha = nominalAlpha
+        group.currentAlpha = nominalAlpha
+        group.targetAlpha = nominalAlpha
+        group.resourceAlphaSecret = true
+
+        for _, region in ipairs(group.frames) do
+            SafeSetAlphaPossiblySecret(region, alpha)
+        end
+        return true
+    end
+
+    group.resourceAlphaSecret = false
+    return false, alpha
+end
+
 local function SetGroupAlpha(group, alpha)
     alpha = Clamp(alpha, 0, 1)
     group.currentAlpha = alpha
@@ -841,17 +1023,31 @@ local function StartModeTransition(showFullHUD, duration)
 
     for key, group in pairs(groups) do
         if ImmersionFadeDB.groups[key] then
-            local targetAlpha = GetDesiredGroupAlpha(key, showFullHUD)
-            group.startAlpha = group.currentAlpha
-            group.targetAlpha = targetAlpha
-            group.startedAt = GetTime()
-            group.duration = duration
-            group.animating = duration > 0 and math.abs(group.currentAlpha - targetAlpha) > 0.001
-            if not group.animating then
-                SetGroupAlpha(group, targetAlpha)
+            local handledSecretResource = false
+            local targetAlpha
+
+            if group.mode == "playerResource" and not showFullHUD then
+                local secretHandled, plainAlpha = ApplyPlayerResourceExplorationAlpha()
+                handledSecretResource = secretHandled and true or false
+                targetAlpha = plainAlpha or GetDesiredGroupAlpha(key, showFullHUD)
+            else
+                group.resourceAlphaSecret = false
+                targetAlpha = GetDesiredGroupAlpha(key, showFullHUD)
+            end
+
+            if not handledSecretResource then
+                group.startAlpha = group.currentAlpha
+                group.targetAlpha = targetAlpha
+                group.startedAt = GetTime()
+                group.duration = duration
+                group.animating = duration > 0 and math.abs(group.currentAlpha - targetAlpha) > 0.001
+                if not group.animating then
+                    SetGroupAlpha(group, targetAlpha)
+                end
             end
         else
             group.animating = false
+            group.resourceAlphaSecret = false
             group.targetAlpha = 1
             SetGroupAlpha(group, 1)
         end
@@ -926,6 +1122,46 @@ local function UpdateGamePadModifierState(force)
     else
         StartSingleGroupTransition("controllerUI", 0, ImmersionFadeDB.fadeOutDuration)
     end
+end
+
+local function UpdatePlayerFrameResourceVisibility(immediate)
+    if not initialized or not ImmersionFadeDB or not ImmersionFadeDB.groups.playerFrame then
+        return
+    end
+
+    local group = groups.playerFrame
+    if not group then
+        return
+    end
+
+    -- Preserve the normal post-combat grace period. The frame is already fully
+    -- visible during this window, so there is no need to react to regeneration
+    -- until exploration mode actually begins.
+    if hideTimer then
+        return
+    end
+
+    if ShouldShowFullHUD() then
+        group.resourceAlphaSecret = false
+        StartSingleGroupTransition("playerFrame", 1, immediate and 0 or ImmersionFadeDB.fadeInDuration)
+        return
+    end
+
+    local secretHandled, plainAlpha = ApplyPlayerResourceExplorationAlpha()
+    if secretHandled then
+        RefreshInteractionBlockers()
+        return
+    end
+
+    local targetAlpha = plainAlpha or GetExplorationAlpha("playerFrame")
+    local duration = 0
+    if not immediate then
+        duration = targetAlpha > group.currentAlpha
+            and ImmersionFadeDB.fadeInDuration
+            or ImmersionFadeDB.fadeOutDuration
+    end
+
+    StartSingleGroupTransition("playerFrame", targetAlpha, duration)
 end
 
 local function BeginTimedPause(seconds)
@@ -1054,6 +1290,8 @@ local function PrintGroupList()
         local mode = GROUP_DEFINITIONS[key].mode
         if mode == "experience" then
             Print(string.format("  %-14s %s  XP-triggered  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
+        elseif mode == "playerResource" then
+            Print(string.format("  %-14s %s  resource-aware  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
         elseif mode == "alwaysHidden" then
             Print(string.format("  %-14s %s  hidden while active  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
         elseif mode == "gamepadModifier" then
@@ -1088,6 +1326,32 @@ local function PrintClientInfo()
         flavor, tostring(CLIENT_VERSION), tostring(CLIENT_BUILD), tostring(CLIENT_INTERFACE)))
 end
 
+local function PrintResourceInfo()
+    local powerType, powerToken, isRestoring = GetPrimaryResourceInfo()
+    if powerType == nil then
+        Print("Primary resource could not be resolved.")
+        return
+    end
+
+    local secrecy = "unknown"
+    if type(UnitPowerPercent) == "function" then
+        local curve = GetPlayerResourceVisibilityCurve(GetExplorationAlpha("playerFrame"))
+        if curve then
+            local ok, value = pcall(UnitPowerPercent, "player", powerType, false, curve)
+            if ok then
+                if IsSecretValue(value) then
+                    secrecy = "secret (curve-safe)"
+                elseif value ~= nil then
+                    secrecy = "readable"
+                end
+            end
+        end
+    end
+
+    Print(string.format("Primary resource: %s (%s), restoring=%s, value=%s.",
+        tostring(powerToken or "UNKNOWN"), tostring(powerType), isRestoring and "yes" or "no", secrecy))
+end
+
 local function PrintStatus()
     PrintClientInfo()
     local state = ShouldShowFullHUD() and "COMBAT / FULL HUD" or "EXPLORATION"
@@ -1113,6 +1377,7 @@ local function PrintHelp()
     Print("Commands:")
     Print("  /imfade status - current mode, client and timing")
     Print("  /imfade client - print detected WoW build/interface")
+    Print("  /imfade resource - print primary-resource diagnostics")
     Print("  /imfade on | off - enable/disable automatic mode switching")
     Print("  /imfade pause - toggle an indefinite full-HUD pause")
     Print("  /imfade pause <seconds> - show the full HUD temporarily")
@@ -1147,6 +1412,11 @@ local function HandleSlashCommand(message)
 
     if command == "client" or command == "build" then
         PrintClientInfo()
+        return
+    end
+
+    if command == "resource" or command == "power" then
+        PrintResourceInfo()
         return
     end
 
@@ -1303,7 +1573,7 @@ local function HandleSlashCommand(message)
         CancelPauseTimer()
         ResolveFrames()
         EvaluateMode(false)
-        Print("Settings reset to v0.6.1 defaults.")
+        Print("Settings reset to v0.6.2 defaults.")
         return
     end
 
@@ -1327,7 +1597,7 @@ local function Initialize()
     SlashCmdList.ImmersionFade = HandleSlashCommand
 
     EvaluateMode(false)
-    Print("v0.6.1 loaded. Forever controller UI support enabled. Type |cffffffff/imfade|r for controls.")
+    Print("v0.6.3 loaded. Secret-safe resource-aware player frame enabled. Type |cffffffff/imfade|r for controls.")
 end
 
 addon:SetScript("OnEvent", function(_, event, arg1)
@@ -1350,6 +1620,12 @@ addon:SetScript("OnEvent", function(_, event, arg1)
     elseif event == "PLAYER_REGEN_ENABLED" then
         EnsureInteractionBlockers()
         EnterExplorationMode(false)
+    elseif event == "UNIT_POWER_UPDATE"
+        or event == "UNIT_MAXPOWER"
+        or event == "UNIT_DISPLAYPOWER" then
+        if arg1 == "player" then
+            UpdatePlayerFrameResourceVisibility(false)
+        end
     elseif event == "PLAYER_XP_UPDATE" then
         if arg1 == nil or arg1 == "player" then
             CheckExperienceGain()
@@ -1427,7 +1703,13 @@ addon:SetScript("OnUpdate", function(_, elapsed)
         heartbeat = 0
         for key, group in pairs(groups) do
             if ImmersionFadeDB.groups[key] then
-                SetGroupAlpha(group, group.currentAlpha)
+                if group.mode == "playerResource"
+                    and group.resourceAlphaSecret
+                    and not ShouldShowFullHUD() then
+                    ApplyPlayerResourceExplorationAlpha()
+                else
+                    SetGroupAlpha(group, group.currentAlpha)
+                end
             end
         end
         RefreshInteractionBlockers()
@@ -1444,6 +1726,9 @@ addon:RegisterEvent("ADDON_LOADED")
 addon:RegisterEvent("PLAYER_ENTERING_WORLD")
 addon:RegisterEvent("PLAYER_REGEN_DISABLED")
 addon:RegisterEvent("PLAYER_REGEN_ENABLED")
+addon:RegisterEvent("UNIT_POWER_UPDATE")
+addon:RegisterEvent("UNIT_MAXPOWER")
+addon:RegisterEvent("UNIT_DISPLAYPOWER")
 addon:RegisterEvent("PLAYER_XP_UPDATE")
 addon:RegisterEvent("PLAYER_LEVEL_UP")
 addon:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
