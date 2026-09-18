@@ -12,6 +12,17 @@ local xpRevealActive = false
 local lastXP = nil
 local heartbeat = 0
 local rescanTimer = 0
+local gamepadPollTimer = 0
+local gamepadModifierActive = false
+local gamepadButtonIndexes = {}
+local gamepadButtonIndexesDirty = true
+
+local GAMEPAD_REVEAL_BUTTONS = {
+    "PADLSHOULDER",
+    "PADLTRIGGER",
+    "PADRSHOULDER",
+    "PADRTRIGGER",
+}
 
 -- Forever is its own product/flavor, but the 1.60 client uses the modern UI
 -- architecture. Keep the detection interface-based rather than assuming that
@@ -48,6 +59,7 @@ local DEFAULTS = {
         microMenu = true,
         cooldowns = true,
         swingTimer = true,
+        controllerUI = true,
         chat = true,
         experienceBar = true,
         performanceBar = true,
@@ -165,6 +177,17 @@ local GROUP_DEFINITIONS = {
             { "SwingTimerOffHandFrame", "SwingTimerOffhandFrame" },
         },
     },
+    controllerUI = {
+        label = "Controller action UI",
+        blockMouse = false,
+        mode = "gamepadModifier",
+        elements = {
+            -- Forever beta: the large controller action overlay is rooted here.
+            -- Fading the parent keeps all page units, icons, labels, and helper
+            -- artwork in sync without touching its protected child buttons.
+            { "GamepadMainActionBarFrame" },
+        },
+    },
     chat = {
         label = "Chat",
         blockMouse = false,
@@ -236,6 +259,7 @@ local GROUP_ORDER = {
     "microMenu",
     "cooldowns",
     "swingTimer",
+    "controllerUI",
     "chat",
     "experienceBar",
     "performanceBar",
@@ -284,6 +308,133 @@ local function SafeTruthyCall(func, ...)
         return false
     end
     return value and true or false
+end
+
+local function RebuildGamePadButtonIndexes()
+    gamepadButtonIndexes = {}
+    gamepadButtonIndexesDirty = false
+
+    if not C_GamePad or type(C_GamePad.ButtonBindingToIndex) ~= "function" then
+        return
+    end
+
+    for _, bindingName in ipairs(GAMEPAD_REVEAL_BUTTONS) do
+        local ok, buttonIndex = pcall(C_GamePad.ButtonBindingToIndex, bindingName)
+        if ok and type(buttonIndex) == "number" and not IsSecretValue(buttonIndex) then
+            gamepadButtonIndexes[bindingName] = buttonIndex
+        end
+    end
+end
+
+local function IsGamePadBindingDown(bindingName)
+    -- Direct input-state polling is the most reliable path on the modern client.
+    -- In particular, Forever can route PADRTRIGGER through cursor-click handling,
+    -- which may make it disappear from the combined mapped-state button table.
+    if type(IsKeyDown) == "function" then
+        local ok, down = pcall(IsKeyDown, bindingName)
+        if ok and not IsSecretValue(down) and down then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function IsMappedGamePadButtonDown(state, buttonIndex)
+    if type(state) ~= "table" or IsSecretValue(state) then
+        return false
+    end
+
+    local buttons = state.buttons
+    if type(buttons) ~= "table" or IsSecretValue(buttons) then
+        return false
+    end
+
+    local okButton, isDown = pcall(function()
+        return buttons[buttonIndex]
+    end)
+    return okButton and not IsSecretValue(isDown) and isDown and true or false
+end
+
+local function GetMappedGamePadStates()
+    local states = {}
+    local seenDeviceIDs = {}
+
+    if not C_GamePad or type(C_GamePad.GetDeviceMappedState) ~= "function" then
+        return states
+    end
+
+    -- Ask the client for the default/combined state first, preserving the path
+    -- that already worked for LB/LT/RB in v0.6.0.
+    local okDefault, defaultState = pcall(C_GamePad.GetDeviceMappedState)
+    if okDefault and type(defaultState) == "table" and not IsSecretValue(defaultState) then
+        table.insert(states, defaultState)
+    end
+
+    -- Forever may route a trigger through cursor handling on the active physical
+    -- device even when the combined virtual device does not expose that button.
+    if type(C_GamePad.GetActiveDeviceID) == "function" then
+        local okID, deviceID = pcall(C_GamePad.GetActiveDeviceID)
+        if okID and type(deviceID) == "number" and not IsSecretValue(deviceID) then
+            seenDeviceIDs[deviceID] = true
+            local okState, state = pcall(C_GamePad.GetDeviceMappedState, deviceID)
+            if okState and type(state) == "table" and not IsSecretValue(state) then
+                table.insert(states, state)
+            end
+        end
+    end
+
+    if type(C_GamePad.GetCombinedDeviceID) == "function" then
+        local okID, deviceID = pcall(C_GamePad.GetCombinedDeviceID)
+        if okID and type(deviceID) == "number" and not IsSecretValue(deviceID) and not seenDeviceIDs[deviceID] then
+            local okState, state = pcall(C_GamePad.GetDeviceMappedState, deviceID)
+            if okState and type(state) == "table" and not IsSecretValue(state) then
+                table.insert(states, state)
+            end
+        end
+    end
+
+    return states
+end
+
+local function IsGamePadModifierHeld()
+    if not C_GamePad then
+        return false
+    end
+
+    if type(C_GamePad.IsEnabled) == "function" then
+        local okEnabled, enabled = pcall(C_GamePad.IsEnabled)
+        if okEnabled and not IsSecretValue(enabled) and not enabled then
+            return false
+        end
+    end
+
+    -- Prefer a direct key-state query. This catches PADRTRIGGER on Forever even
+    -- when it is consumed by GamePadCursorLeftClick and absent from the combined
+    -- mapped-state table.
+    for _, bindingName in ipairs(GAMEPAD_REVEAL_BUTTONS) do
+        if IsGamePadBindingDown(bindingName) then
+            return true
+        end
+    end
+
+    if gamepadButtonIndexesDirty then
+        RebuildGamePadButtonIndexes()
+    end
+
+    local states = GetMappedGamePadStates()
+    for _, bindingName in ipairs(GAMEPAD_REVEAL_BUTTONS) do
+        local buttonIndex = gamepadButtonIndexes[bindingName]
+        if type(buttonIndex) == "number" then
+            for _, state in ipairs(states) do
+                if IsMappedGamePadButtonDown(state, buttonIndex) then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 local function ResolveGlobalPath(path)
@@ -552,6 +703,16 @@ local function GetDesiredGroupAlpha(key, showFullHUD)
         return 0
     end
 
+    if group.mode == "gamepadModifier" then
+        -- The controller overlay is combat UI first and contextual exploration UI
+        -- second: always visible in combat/full-HUD states, otherwise reveal it
+        -- only while a shoulder/trigger modifier is held.
+        if showFullHUD then
+            return 1
+        end
+        return gamepadModifierActive and 1 or 0
+    end
+
     return showFullHUD and 1 or GetExplorationAlpha(key)
 end
 
@@ -746,6 +907,27 @@ local function EvaluateMode(immediate)
     end
 end
 
+local function UpdateGamePadModifierState(force)
+    local isHeld = IsGamePadModifierHeld()
+    if not force and isHeld == gamepadModifierActive then
+        return
+    end
+
+    gamepadModifierActive = isHeld
+
+    if not initialized or not ImmersionFadeDB or not ImmersionFadeDB.groups.controllerUI then
+        return
+    end
+
+    -- Combat/full-HUD states always reveal the controller overlay. During
+    -- exploration, the overlay follows the shoulder/trigger buttons only.
+    if ShouldShowFullHUD() or gamepadModifierActive then
+        StartSingleGroupTransition("controllerUI", 1, ImmersionFadeDB.fadeInDuration)
+    else
+        StartSingleGroupTransition("controllerUI", 0, ImmersionFadeDB.fadeOutDuration)
+    end
+end
+
 local function BeginTimedPause(seconds)
     seconds = Clamp(tonumber(seconds) or 5, 0.25, 60)
 
@@ -874,6 +1056,8 @@ local function PrintGroupList()
             Print(string.format("  %-14s %s  XP-triggered  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
         elseif mode == "alwaysHidden" then
             Print(string.format("  %-14s %s  hidden while active  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
+        elseif mode == "gamepadModifier" then
+            Print(string.format("  %-14s %s  shoulder/trigger reveal  - %s", key, enabled, GROUP_DEFINITIONS[key].label))
         else
             local alpha = GetExplorationAlpha(key)
             Print(string.format("  %-14s %s  alpha %.2f  - %s", key, enabled, alpha, GROUP_DEFINITIONS[key].label))
@@ -1119,7 +1303,7 @@ local function HandleSlashCommand(message)
         CancelPauseTimer()
         ResolveFrames()
         EvaluateMode(false)
-        Print("Settings reset to v0.5.1 defaults.")
+        Print("Settings reset to v0.6.1 defaults.")
         return
     end
 
@@ -1143,7 +1327,7 @@ local function Initialize()
     SlashCmdList.ImmersionFade = HandleSlashCommand
 
     EvaluateMode(false)
-    Print("v0.5.1 loaded. Forever swing-timer support enabled. Type |cffffffff/imfade|r for controls.")
+    Print("v0.6.1 loaded. Forever controller UI support enabled. Type |cffffffff/imfade|r for controls.")
 end
 
 addon:SetScript("OnEvent", function(_, event, arg1)
@@ -1178,10 +1362,18 @@ addon:SetScript("OnEvent", function(_, event, arg1)
     elseif event == "PLAYER_ENTERING_WORLD" then
         ResolveFrames()
         TryHookEditMode()
+        gamepadButtonIndexesDirty = true
+        UpdateGamePadModifierState(true)
         if type(UnitXP) == "function" then
             lastXP = UnitXP("player")
         end
         EvaluateMode(false)
+    elseif event == "GAME_PAD_CONFIGS_CHANGED"
+        or event == "GAME_PAD_CONNECTED"
+        or event == "GAME_PAD_DISCONNECTED"
+        or event == "GAME_PAD_ACTIVE_CHANGED" then
+        gamepadButtonIndexesDirty = true
+        UpdateGamePadModifierState(true)
     else
         -- Vehicle/override UI state changed.
         EvaluateMode(false)
@@ -1193,6 +1385,15 @@ addon:SetScript("OnUpdate", function(_, elapsed)
 
     local now = GetTime()
     local anyAnimating = false
+
+    -- Poll mapped controller state instead of enabling gamepad input on our own
+    -- frame. WoW dispatches OnGamePadButtonDown/Up only to the top-most enabled
+    -- receiver, so polling avoids stealing LB/LT/RB/RT from Blizzard's UI.
+    gamepadPollTimer = gamepadPollTimer + elapsed
+    if gamepadPollTimer >= 0.033 then
+        gamepadPollTimer = 0
+        UpdateGamePadModifierState(false)
+    end
 
     for key, group in pairs(groups) do
         if ImmersionFadeDB.groups[key] and group.animating then
@@ -1250,3 +1451,7 @@ addon:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
 addon:RegisterEvent("UPDATE_POSSESS_BAR")
 addon:RegisterEvent("UNIT_ENTERED_VEHICLE")
 addon:RegisterEvent("UNIT_EXITED_VEHICLE")
+addon:RegisterEvent("GAME_PAD_ACTIVE_CHANGED")
+addon:RegisterEvent("GAME_PAD_CONFIGS_CHANGED")
+addon:RegisterEvent("GAME_PAD_CONNECTED")
+addon:RegisterEvent("GAME_PAD_DISCONNECTED")
