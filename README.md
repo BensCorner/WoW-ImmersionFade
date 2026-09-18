@@ -1,0 +1,81 @@
+# ImmersionFade
+
+ImmersionFade is a lightweight World of Warcraft addon built around one idea:
+
+**Let the UI get out of the way while exploring, and bring it back when it is needed.**
+
+It is designed for WoW: Forever's modern UI architecture and keeps the default Blizzard UI intact rather than replacing it.
+
+## What it does
+
+During exploration, ImmersionFade can fade or hide UI elements that are not immediately useful, such as:
+
+- Action bars and action bar artwork
+- Player frame
+- Micro menu and bag controls
+- Cooldown Manager frames
+- Swing timer
+- Performance / latency display
+
+Some crucial elements remain visible, including the minimap, quest tracker, target frame and chat.
+
+When combat begins, the managed combat UI fades back in automatically.
+
+Additional behavior includes:
+
+- Smooth fade-in and fade-out transitions
+- Reduced chat opacity while exploring
+- XP bar shown briefly when experience is gained
+- Mouse blockers for invisible UI controls
+- Temporary HUD reveal with `/imfade peek`
+- Edit Mode and vehicle / override bar handling
+- WoW: Forever client detection and diagnostics
+
+## Useful commands
+
+```text
+/imfade status
+/imfade pause
+/imfade peek 5
+
+/imfade groups
+/imfade group <group> on
+/imfade group <group> off
+
+/imfade alpha <group> <value>
+/imfade delay <seconds>
+/imfade fadein <seconds>
+/imfade fadeout <seconds>
+/imfade xpseconds <seconds>
+
+/imfade blockers on
+/imfade blockers off
+
+/imfade client
+/imfade frames
+/imfade reset
+```
+
+For a convenient temporary HUD keybind, create a macro containing:
+
+```text
+/imfade peek 5
+```
+
+This reveals the UI for five seconds and then automatically returns to the appropriate exploration or combat state.
+
+## Philosophy
+
+ImmersionFade is intentionally not a complete UI replacement.
+
+The goal is to preserve the familiar Blizzard interface while making Azeroth itself the focus during normal exploration. UI elements should appear when they provide useful information, then quietly disappear when they are no longer needed.
+
+## Compatibility
+
+ImmersionFade is currently developed for **World of Warcraft: Forever** and its modern/Retail-based UI architecture.
+
+Forever is still evolving, so Blizzard frame names and behavior may change during beta. `/imfade frames` can be used to help diagnose UI elements that are not yet managed correctly.
+
+## Development status
+
+ImmersionFade is an actively evolving personal addon. New Forever-specific frames and behaviors are added as they are encountered in-game.
